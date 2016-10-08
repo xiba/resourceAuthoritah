@@ -192,5 +192,22 @@ class FlaskAppTestCase(unittest.TestCase):
         replyBody = json.loads(replyObject.data.decode('utf-8'))
         assert('error' not in replyBody)
 
+    def test_caching_is_off(self):
+        '''We want to make sure that "quick" successive get requests won't be cached.'''
+        myID = 'me'
+        for i in range(1000):
+            isLocked = json.loads(self.helper_query_lock(self.resourceName).data.decode('utf-8'))[self.resourceName] == 'locked'
+            assert(isLocked == False)
+
+            self.helper_acquire_lock(self.resourceName, myID)
+            isLocked = json.loads(self.helper_query_lock(self.resourceName).data.decode('utf-8'))[self.resourceName] == 'locked'
+            assert(isLocked == True)
+
+            self.helper_release_lock(self.resourceName, myID)
+            isLocked = json.loads(self.helper_query_lock(self.resourceName).data.decode('utf-8'))[self.resourceName] == 'locked'
+            assert(isLocked == False)
+
+
+
 if __name__ == '__main__':
     unittest.main()

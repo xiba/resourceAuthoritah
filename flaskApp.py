@@ -1,11 +1,24 @@
 import resourceInterface
 import json
-
+import time
 from flask import Flask
 from flask import request
 from flask import jsonify
+from functools import wraps
+from datetime import datetime
 app = Flask(__name__)
 
+def nocache(func):
+    @wraps(func)
+    def no_cache(*args, **kwargs):
+        response = func(*args, **kwargs)
+        response.headers['Last-Modified'] = datetime.now()
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '-1'
+        return response
+
+@nocache
 @app.route('/resources/<fResourceName>', methods=['GET'])
 def queryResource(fResourceName):
     if(request.content_type != 'application/json'):
@@ -18,6 +31,7 @@ def queryResource(fResourceName):
         replyDict[fResourceName] = 'free'
     return jsonify(**replyDict)
 
+@nocache
 @app.route('/resources/<fResourceName>', methods=['POST'])
 def acquireResource(fResourceName):
     if(request.content_type != 'application/json'):
@@ -42,6 +56,7 @@ def acquireResource(fResourceName):
         replyDict['error'] = 'resource is already locked'
     return jsonify(**replyDict)
 
+@nocache
 @app.route('/resources/<fResourceName>', methods=['DELETE'])
 def releaseResource(fResourceName):
     if(request.content_type != 'application/json'):
