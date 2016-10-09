@@ -2,16 +2,18 @@
 
 import json
 import time
+import os
 import unittest
 import flaskApp
 import redis
-from multiprocessing import Pool
+import sys
+from multiprocessing import Pool, Process
 import requests
 
-def banzaiCharge(fTimePointOfAttack, fResourceName, fID, fExpirationTimeOfLock):
+def statelessIndependantAcquireLock(fTimePointOfAttack, fResourceName, fID, fExpirationTimeOfLock=30, fTimeoutWindow=0):
     '''attempts to acquire a lock using the requests module (so it won't need any shared data). Returns True if it did'''
     time.sleep(fTimePointOfAttack - time.time())
-    replyObject = requests.post('http://127.0.0.1:5000/resources/' + fResourceName, json={"expiry": fExpirationTimeOfLock, "id" : fID})
+    replyObject = requests.post('http://127.0.0.1:5000/resources/' + fResourceName, json={"expiry": fExpirationTimeOfLock, "id" : fID, "timeout" : fTimeoutWindow})
     jsonReply = replyObject.json()
     return True if "error" not in jsonReply else False
 
@@ -126,11 +128,11 @@ class FlaskAppTestCase(unittest.TestCase):
         assert('error' not in replyBody)
 
     def test_attempt_acquire_locked_resource(self):
-        '''Attempt to acquire an locked lock'''
+        '''Attempt to acquire a locked lock'''
 
         replyObject = self.helper_acquire_lock(self.resourceName)
         assert('error' not in json.loads(replyObject.data.decode('utf-8')))
-        replyObject = self.helper_acquire_lock(self.resourceName)
+        replyObject = self.helper_acquire_lock(self.resourceName, fID='another client')
         assert('error' in json.loads(replyObject.data.decode('utf-8')))
 
     def test_release_locked_resource_without_id(self):
@@ -172,12 +174,12 @@ class FlaskAppTestCase(unittest.TestCase):
     def test_concurrent_attempt_to_lock_free_resource_8(self):
         '''This tries to test the mutual exclusion condition when multiple processes are attempting to acquire a lock at the same time'''
         numberOfProcesses = 8
-        resourceName = 'banzaiChargeKey'
+        resourceName = 'statelessIndependantAcquireLockKey'
         myID = 'me'
         expirationInSeconds = 5
         with Pool(processes=numberOfProcesses) as pool:
             whenToAcquire = time.time() + 5 #give them space to make sure everyone launches at the same time
-            multiple_results = [pool.apply_async(banzaiCharge, (whenToAcquire, resourceName, myID, expirationInSeconds)) for i in range(numberOfProcesses)]
+            multiple_results = [pool.apply_async(statelessIndependantAcquireLock, (whenToAcquire, resourceName, myID + str(i), expirationInSeconds)) for i in range(numberOfProcesses)]
             multiple_results = [m.get() for m in multiple_results]
             assert(multiple_results.count(True) == 1)
 
@@ -186,15 +188,15 @@ class FlaskAppTestCase(unittest.TestCase):
         replyBody = json.loads(replyObject.data.decode('utf-8'))
         assert('error' not in replyBody)
 
-    def test_concurrent_attempt_to_lock_free_resource_200(self):
+    def test_concurrent_attempt_to_lock_free_resource_100(self):
         '''This tries to test the mutual exclusion condition when multiple processes are attempting to acquire a lock at the same time'''
-        numberOfProcesses = 200
-        resourceName = 'banzaiChargeKey'
+        numberOfProcesses = 100
+        resourceName = 'statelessIndependantAcquireLockKey'
         myID = 'me'
         expirationInSeconds = 5
         with Pool(processes=numberOfProcesses) as pool:
             whenToAcquire = time.time() + 5 #give them space to make sure everyone launches at the same time
-            multiple_results = [pool.apply_async(banzaiCharge, (whenToAcquire, resourceName, myID, expirationInSeconds)) for i in range(numberOfProcesses)]
+            multiple_results = [pool.apply_async(statelessIndependantAcquireLock, (whenToAcquire, resourceName, myID + str(i), expirationInSeconds)) for i in range(numberOfProcesses)]
             multiple_results = [m.get() for m in multiple_results]
             assert(multiple_results.count(True) == 1)
 
@@ -223,7 +225,7 @@ class FlaskAppTestCase(unittest.TestCase):
         replyObject = json.loads(self.helper_acquire_lock(self.resourceName, fExpiration=2).data.decode('utf-8'))
         assert('error' not in replyObject)
 
-        replyObject = json.loads(self.helper_acquire_lock(self.resourceName, fExpiration=2).data.decode('utf-8'))
+        replyObject = json.loads(self.helper_acquire_lock(self.resourceName, fExpiration=2, fID = 'otherClient').data.decode('utf-8'))
         assert('error' in replyObject)
 
         time.sleep(2)
@@ -231,8 +233,54 @@ class FlaskAppTestCase(unittest.TestCase):
         replyObject = json.loads(self.helper_acquire_lock(self.resourceName, fExpiration=2).data.decode('utf-8'))
         assert('error' not in replyObject)
 
-        replyObject = json.loads(self.helper_acquire_lock(self.resourceName, fExpiration=2, fTimeoutWindow=3).data.decode('utf-8'))
+        replyObject = json.loads(self.helper_acquire_lock(self.resourceName, fExpiration=2, fTimeoutWindow=3, fID = 'otherClient').data.decode('utf-8'))
         assert('error' not in replyObject)
+
+    def test_a_client_can_reacquire_resource_to_change_ttl(self):
+        '''A client can "re-acquire" a resource. This is useful to change the TTL'''
+        replyObject = json.loads(self.helper_acquire_lock(self.resourceName, fExpiration=9).data.decode('utf-8'))
+        assert('error' not in replyObject)
+
+        replyObject = json.loads(self.helper_acquire_lock(self.resourceName, fExpiration=20).data.decode('utf-8'))
+        assert('error' not in replyObject)
+
+    def test_deadlock_detection_works(self):
+        '''Tests if a deadlock will be detected'''
+        self.helper_acquire_lock('r2', 'c1', 100, 100)
+        self.helper_acquire_lock('r1', 'c2', 100, 100)
+
+        p = Process(target=statelessIndependantAcquireLock, args=(time.time()+1, 'r1', 'c1', 100, 100))
+        p.start()
+
+        time.sleep(4) #to ensure the previous process has registered its request
+
+        replyBody = json.loads(self.helper_acquire_lock('r2', 'c2', 100, 100).data.decode('utf-8'))
+        assert('error' in replyBody)
+        assert('deadlock' in replyBody['error'])
+        p.terminate()
+
+    def test_deadlock_detection_works_2(self):
+        '''Tests if a deadlock will be detected'''
+        raise Exception("Known issue. Bad test. No tv for a millennium")
+
+        self.helper_acquire_lock('r3', 'c1', 100, 100)
+        self.helper_acquire_lock('r1', 'c2', 100, 100)
+        self.helper_acquire_lock('r2', 'c3', 100, 100)
+
+        pool = Pool(processes=3)
+        p1 = pool.apply_async(statelessIndependantAcquireLock, (time.time()+1, 'r1', 'c1', 100, 8))
+        p2 = pool.apply_async(statelessIndependantAcquireLock, (time.time()+1, 'r2', 'c2', 100, 8))
+
+        time.sleep(8) #to ensure the previous processes have registered their requests
+
+        replyBody = json.loads(self.helper_acquire_lock('r3', 'c3', 100, 3).data.decode('utf-8'))
+        assert('error' in replyBody)
+        assert('deadlock' in replyBody['error'])
+        p1.get()
+        p2.get()
+
+    def test_deadlock_resolution_works(self):
+        '''Tests if a deadlock can be resolved by relenquishing resources'''
 
 
 if __name__ == '__main__':
