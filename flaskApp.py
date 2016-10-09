@@ -40,10 +40,17 @@ def acquireResource(fResourceName):
     replyDict = {'resource' : fResourceName}
     requestData = request.get_json()
 
+    numberOfLockingAttempts = 1
+    sleepDurationInSeconds = 0
+    if('timeout' in requestData and requestData['timeout'] > 0):
+        timeoutWindowToRetry = requestData['timeout']
+        sleepDurationInSeconds = max(0.1, timeoutWindowToRetry / 10)#nothing shorter than 100 milliseconds and no more than 10 attempts
+        numberOfLockingAttempts = timeoutWindowToRetry // 0.1
+
     if('expiry' not in requestData):
         requestData['expiry'] = 5
-    elif(requestData['expiry'] > 120): #whatever limit, should be configured according to the usecase of the server
-        replyDict['error'] = 'Expiration value of ' + str(requestData['expiry']) + ' is too large'
+    elif(requestData['expiry'] > 120 or requestData['expiry'] < 1): #whatever limit, should be configured according to the usecase of the server
+        replyDict['error'] = 'Expiration value of ' + str(requestData['expiry']) + ' is out of bound'
         return jsonify(**replyDict)
     if('id' not in requestData):
         replyDict['error'] = 'ID not provided in request'
@@ -52,8 +59,14 @@ def acquireResource(fResourceName):
     expiryVal = requestData['expiry']
     idVal = requestData['id']
 
-    if(not resourceInterface.acquireResource(fResourceName, idVal, expiryVal)):
-        replyDict['error'] = 'resource is already locked'
+    while(numberOfLockingAttempts > 0):
+        if(resourceInterface.acquireResource(fResourceName, idVal, expiryVal)):
+            return jsonify(**replyDict)
+        numberOfLockingAttempts -= 1
+        time.sleep(sleepDurationInSeconds)
+
+    #fell through the loop, nothing locked, cri moar
+    replyDict['error'] = 'resource is already locked'
     return jsonify(**replyDict)
 
 @nocache

@@ -32,9 +32,9 @@ class FlaskAppTestCase(unittest.TestCase):
         '''Returns the state of the lock'''
         return self.app.get('/resources/' + fResourceName, content_type='application/json')
 
-    def helper_acquire_lock(self, fResourceName, fID = "whatever daaaaad. I'm an adult now", fExpiration=30):
+    def helper_acquire_lock(self, fResourceName, fID = "whatever daaaaad. I'm an adult now", fExpiration=30, fTimeoutWindow=0):
         '''Returns the response object'''
-        jsonArgs = dict(id=fID, expiry=fExpiration)
+        jsonArgs = dict(id=fID, expiry=fExpiration, timeout=fTimeoutWindow)
         return self.app.post('/resources/' + fResourceName, data=json.dumps(jsonArgs), content_type='application/json')
 
     def helper_release_lock(self, fResourceName, fID = 'uhhh, I said whatever, now go away'):
@@ -91,6 +91,18 @@ class FlaskAppTestCase(unittest.TestCase):
         '''There is an upper limit to the expiration field'''
         myID = 'still not Batman'
         expirationLength = 100000000
+        replyObject = self.helper_acquire_lock(self.resourceName, myID, expirationLength)
+        replyBody = json.loads(replyObject.data.decode('utf-8'))
+        assert('error' in replyBody)
+
+        myID = 'still not Batman'
+        expirationLength = 0
+        replyObject = self.helper_acquire_lock(self.resourceName, myID, expirationLength)
+        replyBody = json.loads(replyObject.data.decode('utf-8'))
+        assert('error' in replyBody)
+
+        myID = 'still not Batman'
+        expirationLength = -1
         replyObject = self.helper_acquire_lock(self.resourceName, myID, expirationLength)
         replyBody = json.loads(replyObject.data.decode('utf-8'))
         assert('error' in replyBody)
@@ -174,7 +186,6 @@ class FlaskAppTestCase(unittest.TestCase):
         replyBody = json.loads(replyObject.data.decode('utf-8'))
         assert('error' not in replyBody)
 
-
     def test_concurrent_attempt_to_lock_free_resource_200(self):
         '''This tries to test the mutual exclusion condition when multiple processes are attempting to acquire a lock at the same time'''
         numberOfProcesses = 200
@@ -207,6 +218,21 @@ class FlaskAppTestCase(unittest.TestCase):
             isLocked = json.loads(self.helper_query_lock(self.resourceName).data.decode('utf-8'))[self.resourceName] == 'locked'
             assert(isLocked == False)
 
+    def test_timeout_argument(self):
+        '''Tests the timeout argument in the lock acquisition process'''
+        replyObject = json.loads(self.helper_acquire_lock(self.resourceName, fExpiration=2).data.decode('utf-8'))
+        assert('error' not in replyObject)
+
+        replyObject = json.loads(self.helper_acquire_lock(self.resourceName, fExpiration=2).data.decode('utf-8'))
+        assert('error' in replyObject)
+
+        time.sleep(2)
+
+        replyObject = json.loads(self.helper_acquire_lock(self.resourceName, fExpiration=2).data.decode('utf-8'))
+        assert('error' not in replyObject)
+
+        replyObject = json.loads(self.helper_acquire_lock(self.resourceName, fExpiration=2, fTimeoutWindow=3).data.decode('utf-8'))
+        assert('error' not in replyObject)
 
 
 if __name__ == '__main__':
