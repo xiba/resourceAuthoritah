@@ -1,12 +1,14 @@
 import resourceInterface
 import json
 import time
+import random
+import sys
 from flask import Flask
 from flask import request
 from flask import jsonify
 from functools import wraps
 from datetime import datetime
-app = Flask(__name__)
+app = Flask('resourceAuthoritah')
 
 def nocache(func):
     @wraps(func)
@@ -40,18 +42,21 @@ def acquireResource(fResourceName):
     replyDict = {'resource' : fResourceName}
     requestData = request.get_json()
 
-    numberOfLockingAttempts = 1
+    numberOfLockingAttempts = 0
     sleepDurationInSeconds = 0
     if('timeout' in requestData and requestData['timeout'] > 0):
         timeoutWindowToRetry = requestData['timeout']
-        sleepDurationInSeconds = max(0.1, timeoutWindowToRetry / 10)#nothing shorter than 100 milliseconds and no more than 10 attempts
-        numberOfLockingAttempts = timeoutWindowToRetry // 0.1
+        sleepDurationInSeconds = max(0.1, timeoutWindowToRetry / 10)#nothing shorter than 100 milliseconds, 10 attempts sounds good enough
+        sleepDurationInSeconds = min(1, sleepDurationInSeconds) #shouldn't sleep for too long
+        sleepDurationInSeconds += random.random() #some jitter
+        numberOfLockingAttempts = timeoutWindowToRetry // sleepDurationInSeconds
 
     if('expiry' not in requestData):
         requestData['expiry'] = 5
     elif(requestData['expiry'] > 120 or requestData['expiry'] < 1): #whatever limit, should be configured according to the usecase of the server
         replyDict['error'] = 'Expiration value of ' + str(requestData['expiry']) + ' is out of bound'
         return jsonify(**replyDict)
+
     if('id' not in requestData):
         replyDict['error'] = 'ID not provided in request'
         return jsonify(**replyDict)
@@ -59,13 +64,28 @@ def acquireResource(fResourceName):
     expiryVal = requestData['expiry']
     idVal = requestData['id']
 
+    #if resource is locked, check if there's a deadlock, return if yes
+    if(resourceInterface.acquireResource(fResourceName, idVal, expiryVal)): #resource locked
+        return jsonify(**replyDict) #succeded in acquiring lock
+
+    resourceInterface.addReverseEdge(idVal, fResourceName)
+
+    if(resourceInterface.detectDeadlock(idVal, fResourceName)):
+        replyDict['error'] = 'deadlock, consider relinquishing resources'
+        resourceInterface.removeReverseEdge(idVal, fResourceName)
+        return jsonify(**replyDict)
+
+    #if the user specified a timeout, keep trying for that length of time
     while(numberOfLockingAttempts > 0):
         if(resourceInterface.acquireResource(fResourceName, idVal, expiryVal)):
+            resourceInterface.removeReverseEdge(idVal, fResourceName)
             return jsonify(**replyDict)
         numberOfLockingAttempts -= 1
         time.sleep(sleepDurationInSeconds)
 
-    #fell through the loop, nothing locked, cri moar
+    resourceInterface.removeReverseEdge(idVal, fResourceName)
+
+    #Nothing to do but retry, cri moar
     replyDict['error'] = 'resource is already locked'
     return jsonify(**replyDict)
 

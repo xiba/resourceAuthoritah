@@ -25,7 +25,7 @@ Three operations are offered through different methods on the same url:
 
     **timeout** how much time should be spent retrying to acquire the lock if it's not free.  
 
-    Returns an error field in the response body (json, remember) if it fails to acquire the lock.  
+    Returns an **error** field in the response body (json, remember) if it fails to acquire the lock (pointing out that it's a deadlock in the value of 'error', if that's the case)  .
 
 3. '/resources/\<fResourceName\>', methods=['DELETE']  
 
@@ -45,8 +45,6 @@ Dependencies are:
 
 
 ####TODO (ordered):  
-
-- Deadlock detection (in progress on branch **deadlock-detection**, with a bug cornered but not yet squashed)
 - Resource names should be moved to request bodies to allow for arbitrary binary names (or we can keep them in the url but make sure to encode them first (size limit tho))
 - Error codes should be standardized
 - Expiry dates should be sent back as portable timestamps and not just as request offsets (to account for lost time till they're set)
