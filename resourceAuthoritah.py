@@ -8,7 +8,7 @@ from flask import request
 from flask import jsonify
 from functools import wraps
 from datetime import datetime
-app = Flask(__name__)
+app = Flask('resourceAuthoritah')
 
 def nocache(func):
     @wraps(func)
@@ -49,7 +49,7 @@ def acquireResource(fResourceName):
         sleepDurationInSeconds = max(0.1, timeoutWindowToRetry / 10)#nothing shorter than 100 milliseconds, 10 attempts sounds good enough
         sleepDurationInSeconds = min(1, sleepDurationInSeconds) #shouldn't sleep for too long
         sleepDurationInSeconds += random.random() #some jitter
-        numberOfLockingAttempts = timeoutWindowToRetry // 0.1
+        numberOfLockingAttempts = timeoutWindowToRetry // sleepDurationInSeconds
 
     if('expiry' not in requestData):
         requestData['expiry'] = 5
@@ -107,5 +107,4 @@ def releaseResource(fResourceName):
     return jsonify(**replyDict)
 
 if __name__ == '__main__':
-
     app.run()
